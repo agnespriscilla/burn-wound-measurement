@@ -1,0 +1,9 @@
+streamlit==1.52.0
+opencv-python-headless==4.12.0.88
+numpy==2.2.6
+pandas==2.3.3
+Pillow==12.0.0
+google-auth==2.41.0
+google-auth-oauthlib==1.2.3
+google-auth-httplib2==0.2.1
+google-api-python-client==2.131.0
