@@ -51,13 +51,6 @@ st.markdown("""
         margin: 1rem 0;
         border-radius: 5px;
     }
-    .error-box {
-        background-color: #F8D7DA;
-        border-left: 5px solid #DC3545;
-        padding: 1rem;
-        margin: 1rem 0;
-        border-radius: 5px;
-    }
     .info-box {
         background-color: #D1ECF1;
         border-left: 5px solid #0C5460;
@@ -141,8 +134,56 @@ def detect_coin_for_calibration(image, coin_diameter_cm=2):
     return None, None
 
 
+def grayscale_otsu_segmentation(image):
+    """EXACT COPY dari batch - Binary Gray"""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return gray, binary
+
+
+def hsv_otsu_segmentation(image):
+    """EXACT COPY dari batch - Binary HSV"""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+
+    blur_v = cv2.GaussianBlur(v, (5,5), 0)
+    _, v_otsu = cv2.threshold(blur_v, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    lower = np.array([0, 30, 50])
+    upper = np.array([25, 255, 255])
+    hsv_mask = cv2.inRange(hsv, lower, upper)
+
+    combined = cv2.bitwise_and(v_otsu, hsv_mask)
+    return combined
+
+
+def morphological_processing(binary):
+    """EXACT COPY dari batch - Opening, Closing, Hole Filling"""
+    kernel = np.ones((5,5), np.uint8)
+
+    opening = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+    closing = cv2.morphologyEx(opening, cv2.MORPH_CLOSE, kernel)
+
+    floodfill = closing.copy()
+    h, w = closing.shape
+    mask = np.zeros((h+2, w+2), np.uint8)
+    cv2.floodFill(floodfill, mask, (0,0), 255)
+    hole_filled = closing | cv2.bitwise_not(floodfill)
+
+    return opening, closing, hole_filled
+
+
+def contour_extraction(image, binary):
+    """EXACT COPY dari batch - Contour"""
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour_img = image.copy()
+    cv2.drawContours(contour_img, contours, -1, (0, 255, 0), 2)
+    return contour_img, contours
+
+
 def calculate_wound_area(binary_mask, pixels_per_cm):
-    """EXACT COPY dari batch processing"""
+    """EXACT COPY dari batch"""
     area_pixels = np.sum(binary_mask > 0)
 
     if pixels_per_cm is None or pixels_per_cm == 0:
@@ -193,7 +234,7 @@ def calculate_wound_ratio(wound_area_cm2, reference_area_cm2=None):
 
 
 def create_visualization(original, mask, coin_info, area_info, ratio_info):
-    """EXACT COPY dari batch processing"""
+    """EXACT COPY dari batch"""
     result_img = original.copy()
 
     if coin_info:
@@ -218,10 +259,10 @@ def create_visualization(original, mask, coin_info, area_info, ratio_info):
     ]
 
     if coin_info is None:
-        texts.insert(0, "WARNING: No coin detected (using default scale)")
+        texts.insert(0, "WARNING: No coin detected")
         text_color = (0, 0, 255)
     elif not coin_info.get('in_corner', False):
-        texts.insert(0, "WARNING: Coin detected in center (may be inaccurate)")
+        texts.insert(0, "WARNING: Coin in center")
         text_color = (0, 165, 255)
     else:
         text_color = (0, 255, 0)
@@ -237,7 +278,7 @@ def create_visualization(original, mask, coin_info, area_info, ratio_info):
 
 
 def get_image_download_link(img, filename):
-    """Generate download link for image"""
+    """Generate download link"""
     buffered = io.BytesIO()
     img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     img_pil.save(buffered, format="PNG")
@@ -252,12 +293,34 @@ def get_image_download_link(img, filename):
 
 def main():
     st.markdown('<div class="main-header">🔥 Burn Wound Detection & Measurement</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">100% EXACT Batch Processing - Upload 2 Files</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">Flexible Mode: Full Pipeline or Batch Exact</div>', unsafe_allow_html=True)
 
     # Sidebar
     with st.sidebar:
         st.image("https://img.icons8.com/fluency/96/000000/medical-heart.png", width=100)
         st.title("⚙️ Settings")
+        
+        st.subheader("🎯 Processing Mode")
+        processing_mode = st.radio(
+            "Pilih mode:",
+            ["📸 Full Pipeline (1 File)", "🎯 Exact Batch (2 Files)"],
+            help="Full Pipeline = upload 1 gambar, segmentasi real-time\nExact Batch = upload original + mask untuk hasil yang sama persis"
+        )
+        
+        # Settings untuk Full Pipeline
+        if processing_mode == "📸 Full Pipeline (1 File)":
+            st.subheader("📋 Segmentation Method")
+            seg_method = st.selectbox(
+                "Pilih metode:",
+                [
+                    "Hole Filled (Recommended)",
+                    "Binary HSV",
+                    "Binary Gray",
+                    "Opening",
+                    "Closing"
+                ],
+                help="Hole Filled = hasil terbaik (sama dengan batch)"
+            )
         
         st.subheader("🪙 Koin Referensi")
         coin_diameter = st.number_input(
@@ -265,288 +328,291 @@ def main():
             min_value=0.5,
             max_value=5.0,
             value=2.0,
-            step=0.1,
-            help="Diameter koin yang digunakan sebagai referensi"
+            step=0.1
         )
         
-        st.subheader("📊 Export Options")
+        st.subheader("📊 Export")
         export_json = st.checkbox("Export JSON", value=True)
         export_csv = st.checkbox("Export CSV", value=True)
         
-        st.subheader("🔧 Debug")
+        st.subheader("🔧 Advanced")
         show_debug = st.checkbox("Show Debug Info", value=True)
+        if processing_mode == "📸 Full Pipeline (1 File)":
+            show_steps = st.checkbox("Show Intermediate Steps", value=False)
         
         st.markdown("---")
-        st.success("✅ **100% EXACT Batch!**\n\nUpload 2 files untuk hasil yang sama!")
+        st.info("💡 **Tip:**\n\nFull Pipeline = fleksibel, coba berbagai metode\n\nExact Batch = hasil sama persis dengan Colab")
 
-    # IMPORTANT INFO BOX
-    st.markdown('<div class="info-box"><strong>📋 CARA PAKAI (EXACT seperti Batch):</strong><br>1. Upload <strong>Original Image</strong> dari folder <code>augmented/</code> (yang ada koin)<br>2. Upload <strong>Mask Image</strong> dari folder <code>segmented/</code> (file <code>hole_filled_*.jpg</code>)<br><br><strong>⚠️ PENTING:</strong> Folder <code>segmented/</code> punya 59k files (7 jenis output). Pastikan upload yang <code>hole_filled_*.jpg</code> SAJA!<br><br>Nama file harus sama! Contoh:<br>- Original: <code>burn_wound_0001.jpg</code><br>- Mask: <code>hole_filled_burn_wound_0001.jpg</code></div>', unsafe_allow_html=True)
-
-    # Upload Section
-    col_up1, col_up2 = st.columns(2)
-    
-    with col_up1:
-        st.subheader("1️⃣ Upload Original (from augmented/)")
-        original_file = st.file_uploader(
-            "Original Image (dengan koin)",
+    # Main Content
+    if processing_mode == "📸 Full Pipeline (1 File)":
+        # ====== MODE 1: FULL PIPELINE ======
+        st.markdown('<div class="info-box">📸 <strong>Full Pipeline Mode</strong><br>Upload 1 gambar (harus ada koin), pilih metode segmentasi, dan lihat hasil real-time!</div>', unsafe_allow_html=True)
+        
+        uploaded_file = st.file_uploader(
+            "📤 Upload Image (dengan koin di sudut)",
             type=["jpg", "jpeg", "png"],
-            key="original",
-            help="Upload dari folder augmented/"
+            help="Upload gambar dari folder augmented/ atau gambar lain yang sudah ada koin"
         )
-    
-    with col_up2:
-        st.subheader("2️⃣ Upload Mask (from segmented/)")
-        mask_file = st.file_uploader(
-            "Mask Image (hole_filled_*.jpg)",
-            type=["jpg", "jpeg", "png"],
-            key="mask",
-            help="Upload dari folder segmented/ - file hole_filled_*.jpg"
-        )
-
-    # Process if both files uploaded
-    if original_file is not None and mask_file is not None:
-        # Read images
-        original_bytes = np.asarray(bytearray(original_file.read()), dtype=np.uint8)
-        original_image = cv2.imdecode(original_bytes, cv2.IMREAD_COLOR)
         
-        mask_bytes = np.asarray(bytearray(mask_file.read()), dtype=np.uint8)
-        mask_image = cv2.imdecode(mask_bytes, cv2.IMREAD_GRAYSCALE)
-        
-        # Display uploaded images
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📷 Original Image")
-            st.image(cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB), use_container_width=True)
-            st.caption(f"Size: {original_image.shape[1]}x{original_image.shape[0]} | File: {original_file.name}")
-        
-        with col2:
-            st.subheader("🎭 Mask Image")
-            st.image(mask_image, use_container_width=True, clamp=True)
-            st.caption(f"Size: {mask_image.shape[1]}x{mask_image.shape[0]} | File: {mask_file.name}")
-        
-        # Check if sizes match - AUTO RESIZE if needed
-        if original_image.shape[:2] != mask_image.shape[:2]:
-            st.warning(f"⚠️ Ukuran berbeda! Original: {original_image.shape[:2]}, Mask: {mask_image.shape[:2]}")
-            st.info("🔧 Auto-resizing mask ke ukuran original...")
-            mask_image = cv2.resize(mask_image, (original_image.shape[1], original_image.shape[0]), interpolation=cv2.INTER_NEAREST)
-        
-        # Check if filenames match
-        original_name = original_file.name
-        mask_name = mask_file.name.replace("hole_filled_", "")
-        
-        if original_name != mask_name:
-            st.warning(f"⚠️ Warning: Nama file tidak match!\nOriginal: {original_name}\nMask: {mask_file.name}\n\nPastikan mask untuk gambar yang benar!")
-        
-        if st.button("🚀 Process (EXACT Batch Method)", type="primary", use_container_width=True):
-            with st.spinner("Processing with EXACT batch code..."):
-                
-                # STEP 1: Detect coin from ORIGINAL (EXACT sama batch)
-                pixels_per_cm, coin_info = detect_coin_for_calibration(original_image, coin_diameter)
-                
-                # STEP 2: Calculate area from MASK (EXACT sama batch)
-                area_info = calculate_wound_area(mask_image, pixels_per_cm)
-                
-                # STEP 3: Calculate ratio
-                if coin_info:
-                    coin_area_cm2 = np.pi * (coin_info['diameter_cm'] / 2) ** 2
-                    ratio_info = calculate_wound_ratio(area_info['area_cm2'], coin_area_cm2)
-                else:
-                    ratio_info = calculate_wound_ratio(area_info['area_cm2'])
-                
-                # STEP 4: Visualization
-                result_img = create_visualization(original_image, mask_image, coin_info, area_info, ratio_info)
-                
-                # Debug info
-                if show_debug:
-                    st.markdown("---")
-                    with st.expander("🐛 Debug Information", expanded=True):
-                        col_d1, col_d2, col_d3 = st.columns(3)
+        if uploaded_file is not None:
+            # Read image
+            file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+            image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("📷 Original Image")
+                st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), use_container_width=True)
+                st.caption(f"Size: {image.shape[1]}x{image.shape[0]} → Will be resized to 512x512")
+                st.caption(f"File: {uploaded_file.name}")
+            
+            if st.button("🚀 Process Image", type="primary", use_container_width=True):
+                with st.spinner("Processing..."):
+                    
+                    # STEP 0: Resize to 512x512 (Match Batch Preprocessing)
+                    original_size = image.shape[:2]
+                    image_resized = cv2.resize(image, (512, 512), interpolation=cv2.INTER_AREA)
+                    
+                    st.info(f"ℹ️ Image resized: {original_size[1]}x{original_size[0]} → 512x512 (matching batch preprocessing)")
+                    
+                    # STEP 1: Detect coin from RESIZED image
+                    pixels_per_cm, coin_info = detect_coin_for_calibration(image_resized, coin_diameter)
+                    
+                    # STEP 2: Segmentation from RESIZED image
+                    if seg_method == "Binary Gray":
+                        gray, binary_gray = grayscale_otsu_segmentation(image)
+                        final_mask = binary_gray
+                        intermediate = {"gray": gray, "binary": binary_gray}
                         
-                        with col_d1:
-                            st.markdown("**Image Info:**")
-                            st.write(f"- Original: {original_image.shape[1]}x{original_image.shape[0]}")
-                            st.write(f"- Mask: {mask_image.shape[1]}x{mask_image.shape[0]}")
-                            st.write(f"- Match: {'✅' if original_image.shape[:2] == mask_image.shape[:2] else '❌'}")
+                    elif seg_method == "Binary HSV":
+                        binary_hsv = hsv_otsu_segmentation(image)
+                        final_mask = binary_hsv
+                        intermediate = {"binary_hsv": binary_hsv}
                         
-                        with col_d2:
-                            st.markdown("**Coin Detection:**")
-                            if coin_info:
-                                st.write(f"- ✅ Detected: Yes")
-                                st.write(f"- Position: {'Corner' if coin_info['in_corner'] else 'Center'}")
-                                st.write(f"- Diameter: {coin_info['diameter_px']} px")
-                                st.write(f"- **Pixels/cm: {coin_info['pixels_per_cm']:.2f}**")
-                            else:
-                                st.write(f"- ❌ Detected: No")
-                                st.write(f"- Using default: 50 px/cm")
+                    elif seg_method == "Opening":
+                        binary_hsv = hsv_otsu_segmentation(image)
+                        opening, closing, hole_filled = morphological_processing(binary_hsv)
+                        final_mask = opening
+                        intermediate = {"binary_hsv": binary_hsv, "opening": opening}
                         
-                        with col_d3:
-                            st.markdown("**Mask Info:**")
-                            st.write(f"- Total pixels: {mask_image.size:,}")
-                            st.write(f"- **Non-zero: {np.sum(mask_image > 0):,}**")
-                            st.write(f"- Zero: {np.sum(mask_image == 0):,}")
-                            st.write(f"- Percentage: {np.sum(mask_image > 0)/mask_image.size*100:.2f}%")
+                    elif seg_method == "Closing":
+                        binary_hsv = hsv_otsu_segmentation(image)
+                        opening, closing, hole_filled = morphological_processing(binary_hsv)
+                        final_mask = closing
+                        intermediate = {"binary_hsv": binary_hsv, "opening": opening, "closing": closing}
                         
-                        st.markdown("---")
-                        st.markdown("**📐 Calculation Formula:**")
-                        st.code(f"""
-area_pixels = {area_info['area_pixels']:,}
-pixels_per_cm = {area_info['pixels_per_cm']}
-area_cm2 = area_pixels / (pixels_per_cm)²
-area_cm2 = {area_info['area_pixels']:,} / ({area_info['pixels_per_cm']})²
-area_cm2 = {area_info['area_pixels']:,} / {area_info['pixels_per_cm']**2:.2f}
-area_cm2 = {area_info['area_cm2']}
-                        """)
-                
-                st.markdown("---")
-                
-                # Display measurement visualization
-                st.subheader("📊 Measurement Visualization")
-                st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), use_container_width=True)
-                
-                # Coin detection status
-                if coin_info is None:
-                    st.markdown('<div class="error-box">❌ <strong>KOIN TIDAK TERDETEKSI!</strong><br>Menggunakan skala default (50 px/cm). Pastikan upload gambar dari folder augmented/ yang ada koin nya!</div>', unsafe_allow_html=True)
-                elif not coin_info.get('in_corner', False):
-                    st.markdown('<div class="warning-box">⚠️ <strong>Koin terdeteksi di tengah gambar!</strong><br>Hasil mungkin kurang akurat.</div>', unsafe_allow_html=True)
-                else:
-                    st.markdown('<div class="success-box">✅ <strong>Koin terdeteksi dengan baik di sudut!</strong><br>Hasil SAMA dengan batch processing! 🎯</div>', unsafe_allow_html=True)
-                
-                # Metrics
-                st.markdown("---")
-                st.subheader("📏 Measurement Results")
-                
-                col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
-                
-                with col_m1:
-                    st.metric("Area (cm²)", f"{area_info['area_cm2']}")
-                
-                with col_m2:
-                    st.metric("Perimeter (cm)", f"{area_info['perimeter_cm']}")
-                
-                with col_m3:
-                    st.metric("Width (cm)", f"{area_info['width_cm']}")
-                
-                with col_m4:
-                    st.metric("Height (cm)", f"{area_info['height_cm']}")
-                
-                with col_m5:
-                    st.metric("Ratio", f"{ratio_info['ratio']}x")
-                
-                # Detailed table
-                st.markdown("---")
-                st.subheader("📋 Detailed Information")
-                
-                col_t1, col_t2, col_t3 = st.columns(3)
-                
-                with col_t1:
-                    st.markdown("**Wound Measurements**")
-                    wound_data = {
-                        "Metric": ["Area (pixels)", "Area (cm²)", "Perimeter (cm)", "Width (cm)", "Height (cm)"],
-                        "Value": [f"{area_info['area_pixels']:,}", area_info['area_cm2'], area_info['perimeter_cm'], area_info['width_cm'], area_info['height_cm']]
-                    }
-                    st.dataframe(pd.DataFrame(wound_data), use_container_width=True, hide_index=True)
-                
-                with col_t2:
-                    st.markdown("**Calibration Info**")
+                    else:  # Hole Filled (Default/Recommended)
+                        binary_hsv = hsv_otsu_segmentation(image)
+                        opening, closing, hole_filled = morphological_processing(binary_hsv)
+                        final_mask = hole_filled
+                        intermediate = {"binary_hsv": binary_hsv, "opening": opening, "closing": closing, "hole_filled": hole_filled}
+                    
+                    # STEP 3: Calculate
+                    area_info = calculate_wound_area(final_mask, pixels_per_cm)
+                    
                     if coin_info:
-                        calib_data = {
-                            "Parameter": ["Coin Detected", "Position", "Diameter (px)", "Pixels per cm"],
-                            "Value": ["Yes", "Corner" if coin_info['in_corner'] else "Center", coin_info['diameter_px'], round(coin_info['pixels_per_cm'], 2)]
-                        }
+                        coin_area_cm2 = np.pi * (coin_info['diameter_cm'] / 2) ** 2
+                        ratio_info = calculate_wound_ratio(area_info['area_cm2'], coin_area_cm2)
                     else:
-                        calib_data = {
-                            "Parameter": ["Coin Detected", "Pixels per cm"],
-                            "Value": ["No", "50 (default)"]
-                        }
-                    st.dataframe(pd.DataFrame(calib_data), use_container_width=True, hide_index=True)
-                
-                with col_t3:
-                    st.markdown("**Ratio Info**")
-                    ratio_data = {
-                        "Parameter": ["Wound Area", "Reference Area", "Ratio", "Percentage"],
-                        "Value": [f"{ratio_info['wound_area_cm2']} cm²", f"{ratio_info['reference_area_cm2']} cm²", f"{ratio_info['ratio']}x", f"{ratio_info['percentage']}%"]
-                    }
-                    st.dataframe(pd.DataFrame(ratio_data), use_container_width=True, hide_index=True)
-                
-                # Export section
-                st.markdown("---")
-                st.subheader("💾 Export Results")
-                
-                col_e1, col_e2, col_e3 = st.columns(3)
-                
-                with col_e1:
-                    st.markdown(get_image_download_link(result_img, "measurement_result.png"), unsafe_allow_html=True)
-                
-                with col_e2:
-                    if export_json:
-                        result_json = {
-                            'original_file': original_file.name,
-                            'mask_file': mask_file.name,
-                            'timestamp': datetime.now().isoformat(),
-                            'coin_detected': coin_info is not None,
-                            'coin_info': coin_info,
-                            'area_info': area_info,
-                            'ratio_info': ratio_info
-                        }
-                        json_str = json.dumps(result_json, indent=2)
-                        st.download_button(label="Download JSON", data=json_str, file_name="measurement_result.json", mime="application/json")
-                
-                with col_e3:
-                    if export_csv:
-                        csv_data = {
-                            'original_file': [original_file.name],
-                            'mask_file': [mask_file.name],
-                            'coin_detected': [coin_info is not None],
-                            'area_pixels': [area_info['area_pixels']],
-                            'area_cm2': [area_info['area_cm2']],
-                            'perimeter_cm': [area_info['perimeter_cm']],
-                            'width_cm': [area_info['width_cm']],
-                            'height_cm': [area_info['height_cm']],
-                            'pixels_per_cm': [area_info['pixels_per_cm']],
-                            'ratio': [ratio_info['ratio']],
-                            'percentage': [ratio_info['percentage']]
-                        }
-                        df = pd.DataFrame(csv_data)
-                        csv = df.to_csv(index=False)
-                        st.download_button(label="Download CSV", data=csv, file_name="measurement_result.csv", mime="text/csv")
-
+                        ratio_info = calculate_wound_ratio(area_info['area_cm2'])
+                    
+                    # STEP 4: Visualize (use RESIZED image for visualization)
+                    result_img = create_visualization(image_resized, final_mask, coin_info, area_info, ratio_info)
+                    
+                    # Display results
+                    with col2:
+                        st.subheader(f"🎯 Result: {seg_method}")
+                        st.image(cv2.cvtColor(final_mask, cv2.COLOR_GRAY2RGB), use_container_width=True)
+                        st.caption(f"Non-zero pixels: {np.sum(final_mask > 0):,}")
+                    
+                    # Show intermediate steps
+                    if show_steps and len(intermediate) > 1:
+                        st.markdown("---")
+                        st.subheader("🔬 Processing Steps")
+                        
+                        cols = st.columns(len(intermediate))
+                        for idx, (name, img) in enumerate(intermediate.items()):
+                            with cols[idx]:
+                                st.image(cv2.cvtColor(img, cv2.COLOR_GRAY2RGB) if len(img.shape) == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2RGB), 
+                                        caption=name.replace('_', ' ').title(), 
+                                        use_container_width=True)
+                    
+                    # Debug info
+                    if show_debug:
+                        st.markdown("---")
+                        with st.expander("🐛 Debug Info", expanded=True):
+                            col_d1, col_d2 = st.columns(2)
+                            
+                            with col_d1:
+                                st.markdown("**Coin Detection:**")
+                                if coin_info:
+                                    st.write(f"✅ Detected: Yes")
+                                    st.write(f"Position: {'Corner ✅' if coin_info['in_corner'] else 'Center ⚠️'}")
+                                    st.write(f"Diameter: {coin_info['diameter_px']} px")
+                                    st.write(f"**Pixels/cm: {coin_info['pixels_per_cm']:.2f}**")
+                                else:
+                                    st.write(f"❌ Not detected (using default: 50)")
+                            
+                            with col_d2:
+                                st.markdown("**Mask Info:**")
+                                st.write(f"Image: 512x512 (resized)")
+                                st.write(f"Method: {seg_method}")
+                                st.write(f"Total pixels: {final_mask.size:,}")
+                                st.write(f"**Non-zero: {np.sum(final_mask > 0):,}**")
+                                st.write(f"Coverage: {np.sum(final_mask > 0)/final_mask.size*100:.2f}%")
+                    
+                    # Results section
+                    st.markdown("---")
+                    st.subheader("📊 Measurement Visualization")
+                    st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), use_container_width=True)
+                    
+                    # Metrics
+                    st.markdown("---")
+                    col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+                    col_m1.metric("Area (cm²)", f"{area_info['area_cm2']}")
+                    col_m2.metric("Perimeter (cm)", f"{area_info['perimeter_cm']}")
+                    col_m3.metric("Width (cm)", f"{area_info['width_cm']}")
+                    col_m4.metric("Height (cm)", f"{area_info['height_cm']}")
+                    col_m5.metric("Ratio", f"{ratio_info['ratio']}x")
+                    
+                    # Export
+                    st.markdown("---")
+                    st.subheader("💾 Export")
+                    col_e1, col_e2, col_e3 = st.columns(3)
+                    
+                    with col_e1:
+                        st.markdown(get_image_download_link(result_img, "result.png"), unsafe_allow_html=True)
+                    
+                    with col_e2:
+                        if export_json:
+                            result_json = {
+                                'filename': uploaded_file.name,
+                                'method': seg_method,
+                                'timestamp': datetime.now().isoformat(),
+                                'coin_info': coin_info,
+                                'area_info': area_info,
+                                'ratio_info': ratio_info
+                            }
+                            st.download_button("Download JSON", json.dumps(result_json, indent=2), "result.json", "application/json")
+                    
+                    with col_e3:
+                        if export_csv:
+                            csv_data = pd.DataFrame([{
+                                'filename': uploaded_file.name,
+                                'method': seg_method,
+                                'area_cm2': area_info['area_cm2'],
+                                'perimeter_cm': area_info['perimeter_cm'],
+                                'width_cm': area_info['width_cm'],
+                                'height_cm': area_info['height_cm'],
+                                'pixels_per_cm': area_info['pixels_per_cm']
+                            }])
+                            st.download_button("Download CSV", csv_data.to_csv(index=False), "result.csv", "text/csv")
+    
     else:
-        st.info("👆 Upload 2 files untuk memulai (Original + Mask)")
+        # ====== MODE 2: EXACT BATCH ======
+        st.markdown('<div class="info-box">🎯 <strong>Exact Batch Mode</strong><br>Upload 2 files untuk hasil yang 100% sama dengan batch processing!</div>', unsafe_allow_html=True)
         
-        st.markdown("### 📖 Struktur Folder Batch Processing:")
+        col_up1, col_up2 = st.columns(2)
         
-        st.code("""
-BurnDetection_ProcessedDataset/
-├── augmented/              ← Upload FILE 1 dari sini (8,464 files)
-│   ├── burn_wound_0001.jpg
-│   ├── burn_wound_0002.jpg
-│   └── ...
-│
-├── segmented/              ← Upload FILE 2 dari sini (59,248 files)
-│   ├── gray_*.jpg          ← ❌ JANGAN ini
-│   ├── binary_gray_*.jpg   ← ❌ JANGAN ini
-│   ├── binary_hsv_*.jpg    ← ❌ JANGAN ini
-│   ├── opening_*.jpg       ← ❌ JANGAN ini
-│   ├── closing_*.jpg       ← ❌ JANGAN ini
-│   ├── hole_filled_*.jpg   ← ✅ UPLOAD INI SAJA!
-│   └── contour_*.jpg       ← ❌ JANGAN ini
-│
-└── measured/               ← Hasil batch (untuk compare)
-    ├── measured_burn_wound_0001.jpg
-    └── measurement_results.csv
-        """)
+        with col_up1:
+            st.subheader("1️⃣ Original (augmented/)")
+            original_file = st.file_uploader("Original image (dengan koin)", type=["jpg", "jpeg", "png"], key="orig")
         
-        st.success("""
-        **✅ Step-by-Step:**
-        1. Buka folder `augmented/` → download `burn_wound_0001.jpg`
-        2. Buka folder `segmented/` → cari dan download `hole_filled_burn_wound_0001.jpg`
-        3. Upload kedua file di atas
-        4. Klik "Process"
-        5. **Hasil PASTI SAMA dengan batch!** 🎯
+        with col_up2:
+            st.subheader("2️⃣ Mask (segmented/)")
+            mask_file = st.file_uploader("Mask (hole_filled_*.jpg)", type=["jpg", "jpeg", "png"], key="mask")
         
-        ⚠️ **JANGAN salah pilih file di segmented/** - ada 7 jenis file per gambar!
-        """)
+        if original_file and mask_file:
+            # Read images
+            original = cv2.imdecode(np.asarray(bytearray(original_file.read()), dtype=np.uint8), cv2.IMREAD_COLOR)
+            mask = cv2.imdecode(np.asarray(bytearray(mask_file.read()), dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.image(cv2.cvtColor(original, cv2.COLOR_BGR2RGB), caption=f"Original: {original_file.name}", use_container_width=True)
+            
+            with col2:
+                st.image(mask, caption=f"Mask: {mask_file.name}", use_container_width=True, clamp=True)
+            
+            if st.button("🚀 Calculate (Exact Batch)", type="primary", use_container_width=True):
+                with st.spinner("Calculating..."):
+                    
+                    # Detect coin from original
+                    pixels_per_cm, coin_info = detect_coin_for_calibration(original, coin_diameter)
+                    
+                    # Calculate from mask
+                    area_info = calculate_wound_area(mask, pixels_per_cm)
+                    
+                    if coin_info:
+                        coin_area_cm2 = np.pi * (coin_info['diameter_cm'] / 2) ** 2
+                        ratio_info = calculate_wound_ratio(area_info['area_cm2'], coin_area_cm2)
+                    else:
+                        ratio_info = calculate_wound_ratio(area_info['area_cm2'])
+                    
+                    result_img = create_visualization(original, mask, coin_info, area_info, ratio_info)
+                    
+                    # Debug
+                    if show_debug:
+                        st.markdown("---")
+                        with st.expander("🐛 Debug Info", expanded=True):
+                            col_d1, col_d2 = st.columns(2)
+                            
+                            with col_d1:
+                                st.markdown("**Coin:**")
+                                if coin_info:
+                                    st.write(f"✅ Detected")
+                                    st.write(f"Pixels/cm: {coin_info['pixels_per_cm']:.2f}")
+                                else:
+                                    st.write(f"❌ Not detected")
+                            
+                            with col_d2:
+                                st.markdown("**Mask:**")
+                                st.write(f"Non-zero: {np.sum(mask > 0):,}")
+                                st.write(f"Formula: {np.sum(mask > 0):,} / {area_info['pixels_per_cm']**2:.2f} = {area_info['area_cm2']}")
+                    
+                    # Results
+                    st.markdown("---")
+                    st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), use_container_width=True)
+                    
+                    st.markdown("---")
+                    col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+                    col_m1.metric("Area (cm²)", f"{area_info['area_cm2']}")
+                    col_m2.metric("Perimeter (cm)", f"{area_info['perimeter_cm']}")
+                    col_m3.metric("Width (cm)", f"{area_info['width_cm']}")
+                    col_m4.metric("Height (cm)", f"{area_info['height_cm']}")
+                    col_m5.metric("Ratio", f"{ratio_info['ratio']}x")
+                    
+                    # Export
+                    st.markdown("---")
+                    col_e1, col_e2, col_e3 = st.columns(3)
+                    
+                    with col_e1:
+                        st.markdown(get_image_download_link(result_img, "result.png"), unsafe_allow_html=True)
+                    
+                    with col_e2:
+                        if export_json:
+                            result_json = {
+                                'original': original_file.name,
+                                'mask': mask_file.name,
+                                'mode': 'exact_batch',
+                                'coin_info': coin_info,
+                                'area_info': area_info,
+                                'ratio_info': ratio_info
+                            }
+                            st.download_button("Download JSON", json.dumps(result_json, indent=2), "result.json")
+                    
+                    with col_e3:
+                        if export_csv:
+                            csv_data = pd.DataFrame([{
+                                'original': original_file.name,
+                                'mask': mask_file.name,
+                                'area_cm2': area_info['area_cm2'],
+                                'perimeter_cm': area_info['perimeter_cm'],
+                                'pixels_per_cm': area_info['pixels_per_cm']
+                            }])
+                            st.download_button("Download CSV", csv_data.to_csv(index=False), "result.csv")
 
 
 if __name__ == "__main__":
