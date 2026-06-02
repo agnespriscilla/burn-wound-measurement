@@ -13,7 +13,7 @@
 
 A web-based application built with Streamlit that automatically detects and measures burn wound area from medical images. The system uses a **coin as a physical reference** for real-world scale calibration, enabling accurate measurements in cm².
 
-The app supports three processing modes — from traditional image processing pipelines to AI-powered detection via the Roboflow API — making it flexible for both research and clinical use cases.
+The app supports three processing modes from traditional image processing pipelines to AI-powered detection via the Roboflow API making it flexible for both research and clinical use cases.
 
 ---
 
@@ -21,11 +21,11 @@ The app supports three processing modes — from traditional image processing pi
 
 ### Three Processing Modes
 
-**Full Pipeline** — Upload a single image with a reference coin. Automatically segments the wound using selectable methods and outputs measurements in real-time.
+**Full Pipeline** : Upload a single image with a reference coin. Automatically segments the wound using selectable methods and outputs measurements in real-time.
 
-**Exact Batch** — Upload the original image + pre-generated mask separately. Produces results identical to batch processing in Google Colab.
+**Exact Batch** : Upload the original image + pre-generated mask separately. Produces results identical to batch processing in Google Colab.
 
-**Roboflow AI** — Connect your custom Roboflow model via API for AI-powered wound detection and segmentation.
+**Roboflow AI** : Connect your custom Roboflow model via API for AI-powered wound detection and segmentation.
 
 ### Segmentation Methods
 | Method | Description |
@@ -37,10 +37,10 @@ The app supports three processing modes — from traditional image processing pi
 | Closing | Morphological closing (gap filling) |
 
 ### Measurement Output
-- **Area** (cm²) — wound surface area
-- **Perimeter** (cm) — wound boundary length
-- **Bounding box** — width × height in cm
-- **Ratio** — wound area relative to the reference coin area
+- **Area** (cm²) : wound surface area
+- **Perimeter** (cm) : wound boundary length
+- **Bounding box** : width × height in cm
+- **Ratio** : wound area relative to the reference coin area
 
 ### Export Options
 - Annotated result image (PNG download)
@@ -133,7 +133,7 @@ requests
 ### Exact Batch Mode
 1. Upload the **original image** (with coin)
 2. Upload the corresponding **pre-generated mask** (`hole_filled_*.jpg`)
-3. Click **Calculate** — results will match batch processing output exactly
+3. Click **Calculate** results will match batch processing output exactly
 
 ### Roboflow AI Mode
 1. Configure your Roboflow credentials in the sidebar (API Key, Workspace, Project, Version)
